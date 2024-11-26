@@ -1,0 +1,546 @@
+---
+title: "drainingVeinStats"
+author: "Kira Shaw"
+date: "2024-06-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+```
+
+``` {r, echo = FALSE, message = FALSE}
+
+# load libraries needed for analysis 
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(lmm)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(ggpubr)
+library(psych)
+
+```
+
+```{r, echo  = FALSE}
+
+rm(list = ls(all.names = TRUE))
+
+## 1. READ IN DATA #########################################################################
+
+## load data table: 
+data_table <- read_excel("U:\\Kira\\Projects\\DrainingVein\\Data\\data4LMM.xlsx")
+data_table_locoGrp <- read_excel("U:\\Kira\\Projects\\DrainingVein\\Data\\locoGrpSortData.xlsx")
+
+## specify which numerical values are factors
+data_table <- data_table %>%
+  mutate(
+    grpID = factor(grpID),
+    animalID = factor(animalID),
+    sessID = factor(sessID),
+    vessID = factor(vessID)
+    )
+
+data_table_locoGrp <- data_table_locoGrp %>%
+  mutate(
+    vessID = factor(vessID),
+    locoGrp = factor(locoGrp)
+    )
+
+#create a column to label 'disease' and 'not disease' groups 
+#then can do a two group comparison between disease and not disease too to enhance stats
+    
+# sanity check- if want to check they are factors:
+# summary(data_table)
+# NB/ why does t2o have NAs?? I think because musn't reach 10% of max peak within timeframe
+
+```
+
+<font size="10"> Descriptive tables: </font> 
+
+```{r, echo  = FALSE}
+
+#create summary table to get descriptive statistics
+
+# get means
+data_means <- cbind(aggregate(maxpk ~ grpID*vessID, data_table, mean),
+                      aggregate(t2max ~ grpID*vessID, data_table, mean),
+                      aggregate(t2o ~ grpID*vessID, data_table, mean),
+                      aggregate(minpk ~ grpID*vessID, data_table, mean),
+                      aggregate(t2min ~ grpID*vessID, data_table, mean)
+)
+data_means <- data_means[, !duplicated(colnames(data_means))]
+names(data_means)[names(data_means) == 'maxpk'] <- 'maxpk_m' 
+names(data_means)[names(data_means) == 't2max'] <- 't2max_m' 
+names(data_means)[names(data_means) == 't2o'] <- 't2o_m' 
+names(data_means)[names(data_means) == 'minpk'] <- 'minpk_m' 
+names(data_means)[names(data_means) == 't2min'] <- 't2min_m' 
+
+# get standard deviations
+data_sd <- cbind(aggregate(maxpk ~ grpID*vessID, data_table, sd),
+                      aggregate(t2max ~ grpID*vessID, data_table, sd),
+                      aggregate(t2o ~ grpID*vessID, data_table, sd),
+                      aggregate(minpk ~ grpID*vessID, data_table, sd),
+                      aggregate(t2min ~ grpID*vessID, data_table, sd),
+                      aggregate(loco_auc ~ grpID*vessID, data_table, length)
+)
+data_sd <- data_sd[, !duplicated(colnames(data_sd))]
+names(data_sd)[names(data_sd) == 'maxpk'] <- 'maxpk_sd' 
+names(data_sd)[names(data_sd) == 't2max'] <- 't2max_sd' 
+names(data_sd)[names(data_sd) == 't2o'] <- 't2o_sd' 
+names(data_sd)[names(data_sd) == 'minpk'] <- 'minpk_sd' 
+names(data_sd)[names(data_sd) == 't2min'] <- 't2min_sd' 
+names(data_sd)[names(data_sd) == 'loco_auc'] <- 'nLocoEvents' 
+data_sd <- data_sd[, !duplicated(colnames(data_sd))]
+
+# join mean and standard deviation tables into one data frame
+data_descriptives <- left_join(data_means,data_sd, by=c("grpID","vessID"))
+#data_descriptives$vessID.y <- NULL
+#names(data_descriptives)[names(data_descriptives) == 'vessID.x'] <- 'vessID' 
+
+#display table
+print("Descriptive statistics table:")
+rmarkdown::paged_table(data_descriptives)
+
+rm(data_means, data_sd) #remove unused variables to tidy work space
+
+```
+<font size="10"> FIGURE 2: Boxplots and LMM results: </font> 
+
+```{r, fig.height=10, fig.width=10, echo = FALSE, message=FALSE}
+
+variablesofinterest <- c("maxpk","t2max","t2o","minpk","t2min")
+
+for(i in 1:length(variablesofinterest)) { #loop ts metrics of interest
+  
+  # stats and plots for vessel ROIs collapsed across experimental groups
+  print(variablesofinterest[i]) #display which ts metric
+  #Run LMM comparing across vessels, with animal ID as random factor
+  model <- lmer(get(variablesofinterest[i])~vessID + (1|animalID), data = data_table) 
+  print(anova(model))
+  em_res = emmeans(model, ~ vessID) #emmeans() corrects p values for multiple comparisons 
+  print(pairs(em_res)) 
+  #plot as violin 
+  p<-ggplot(data_table, aes(x=vessID, y=get(variablesofinterest[i]), fill=vessID)) +
+    ylab(variablesofinterest[i])+
+  geom_violin(position=position_dodge(1))
+  print(p)
+  
+  
+  
+} # end of looping ts metrics of interest
+
+# for copying and pasting data into graphpad or excel for plots/data sharing
+#t <- data_table %>% filter(vessID=="dv" & grpID==4)
+#clipr::write_clip(t$minpk)
+
+
+# also run stats on loco_auc between groups as need to know whether different experimental groups differences could be driven by significantly different levels of loco 
+print("Check for differences in locomotion across exp grps")
+model <- lmer(loco_auc~vessID + (1|animalID), data = data_table) 
+print(anova(model))
+# NB no sig diffs in loco_auc across grps so dnt need pairwise
+#em_res = emmeans(model, ~ vessID*grpID)
+#print(pairs(em_res))
+
+rm(em_res,model,p,p1,i) #remove unused variables to tidy work space
+
+  
+```
+<font size="10"> FIGURE 2F: Paired comparison to compare dv min and art pk: </font> 
+
+```{r, echo  = FALSE}
+
+# Descriptives, overall means
+data_means <- cbind(aggregate(maxpk ~ vessID, data_table, mean),
+                      aggregate(t2max ~ vessID, data_table, mean),
+                      aggregate(t2o ~ vessID, data_table, mean),
+                      aggregate(minpk ~ vessID, data_table, mean),
+                      aggregate(t2min ~ vessID, data_table, mean)
+)
+data_means <- data_means[, !duplicated(colnames(data_means))]
+names(data_means)[names(data_means) == 'maxpk'] <- 'maxpk_m' 
+names(data_means)[names(data_means) == 't2max'] <- 't2max_m' 
+names(data_means)[names(data_means) == 't2o'] <- 't2o_m' 
+names(data_means)[names(data_means) == 'minpk'] <- 'minpk_m' 
+names(data_means)[names(data_means) == 't2min'] <- 't2min_m' 
+
+# get overall standard deviations
+data_sd <- cbind(aggregate(maxpk ~ vessID, data_table, sd),
+                      aggregate(t2max ~ vessID, data_table, sd),
+                      aggregate(t2o ~ vessID, data_table, sd),
+                      aggregate(minpk ~ vessID, data_table, sd),
+                      aggregate(t2min ~ vessID, data_table, sd),
+                      aggregate(loco_auc ~ vessID, data_table, length)
+)
+data_sd <- data_sd[, !duplicated(colnames(data_sd))]
+names(data_sd)[names(data_sd) == 'maxpk'] <- 'maxpk_sd' 
+names(data_sd)[names(data_sd) == 't2max'] <- 't2max_sd' 
+names(data_sd)[names(data_sd) == 't2o'] <- 't2o_sd' 
+names(data_sd)[names(data_sd) == 'minpk'] <- 'minpk_sd' 
+names(data_sd)[names(data_sd) == 't2min'] <- 't2min_sd' 
+names(data_sd)[names(data_sd) == 'loco_auc'] <- 'nLocoEvents' 
+
+# join mean and standard deviation tables into one data frame
+data_descriptivesoverall <- left_join(data_means,data_sd, by="vessID")
+data_descriptivesoverall$vessID.y <- NULL
+names(data_descriptivesoverall)[names(data_descriptivesoverall) == 'vessID.x'] <- 'vessID' 
+
+#display table
+print("Overall descriptive statistics table:")
+rmarkdown::paged_table(data_descriptivesoverall)
+
+## run a two group (paired) comparison to check for sig diff between draining vein min pk and whisker artery max peak
+# (size and timing)
+
+#create a table with each session having an average (rather than having a datapt per loco event)
+data_meanpersess <- cbind(aggregate(maxpk ~ grpID*sessID*vessID, data_table, mean),
+                      aggregate(t2max ~ grpID*sessID*vessID, data_table, mean),
+                      aggregate(t2o ~ grpID*sessID*vessID, data_table, mean),
+                      aggregate(minpk ~ grpID*sessID*vessID, data_table, mean),
+                      aggregate(t2min ~ grpID*sessID*vessID, data_table, mean)
+)
+data_meanpersess <- data_meanpersess[, !duplicated(colnames(data_meanpersess))]
+
+#need to check whether data is normally distrbuted (Shapiro-Wilk test)
+#p-value > 0.05 implying that the distribution of the data are not significantly different from normal distribution. In other words, we can assume the normality.
+print("CHECK NORMAL DISTRIBUTION")
+# check normality for ALL data and for data which is averaged across loco events (per sess)
+t <-  data_table %>% filter(vessID=="dv")
+shapiro.test(t$minpk) #data is not normally distributed
+t <-  data_table %>% filter(vessID=="art")
+shapiro.test(t$maxpk) #data is not normally distributed
+# average per sess
+t <-  data_meanpersess %>% filter(vessID=="dv")
+shapiro.test(t$minpk) #data is not normally distributed
+t <-  data_meanpersess %>% filter(vessID=="art")
+shapiro.test(t$maxpk) #data is not normally distributed
+
+# run a non-parametric
+# equivalent of paired t is a Wilcoxon-Signed ranks
+x <-  data_table %>% filter(vessID=="dv")
+y <- data_table %>% filter(vessID=="art")
+print("Comparing dv min peak to art max peak, all data trials")
+wilcox.test(x$minpk, y$maxpk, mu = 0, paired = TRUE)
+#print("Comparing dv t2min to art t2o")
+#wilcox.test(x$t2min, y$t2o, mu = 0, paired = TRUE)
+
+#repeat test for data averaged per session (i.e. collapsed across loco events)
+# as two grp comparison is too sensitive to such a high N and will always say sig even if not that different otherwise
+x <-  data_meanpersess %>% filter(vessID=="dv")
+y <- data_meanpersess %>% filter(vessID=="art")
+print("Comparing dv min peak to art max peak, data averaged per session")
+wilcox.test(x$minpk, y$maxpk, mu = 0, paired = TRUE)
+#print("Comparing dv t2min to art t2o")
+#wilcox.test(x$t2min, y$t2o, mu = 0, paired = TRUE)
+
+#plot 
+# create an extra column in data_table which includes minpk for dv rows and maxpk for art rows
+t <- data_table %>% filter(vessID=="dv")
+t <- t$minpk
+t1 <- data_table %>% filter(vessID=="wv")
+t1 <- t1$maxpk
+t2 <- data_table %>% filter(vessID=="art")
+t2 <- t2$maxpk
+data_table$peak <- c(t,t1,t2)
+rm(t,t1,t2)
+#and again for timing
+t <- data_table %>% filter(vessID=="dv")
+t <- t$t2min
+t1 <- data_table %>% filter(vessID=="wv")
+t1 <- t1$t2max
+t2 <- data_table %>% filter(vessID=="art")
+t2 <- t2$t2max
+data_table$timing <- c(t,t1,t2)
+rm(t,t1,t2)
+
+variablesofinterest <- c("peak","timing")
+
+for(i in 1:length(variablesofinterest)) { #loop ts metrics of interest
+  
+ p<-ggplot(data_table %>% filter(vessID!="wv"), aes(x=vessID, y=get(variablesofinterest[i]), fill=vessID)) +
+    ylab(variablesofinterest[i])+
+  geom_violin(position=position_dodge(1))
+  print(p)
+  
+}  
+
+
+```
+
+<font size="10"> FIGURE 3A-B; Scatterplots: </font> 
+
+```{r, fig.height=10, fig.width=10, echo = FALSE, message=FALSE}
+
+# Scatter plots and correlation analysis
+
+variablesofinterest <- c("maxpk","minpk")
+
+for(i in 1:length(variablesofinterest)) { #loop ts metrics of interest
+  
+  # see if locomotion AUC correlates with min peak or max peak values
+  p2 <- ggplot(data_table, aes(x=loco_auc, y=get(variablesofinterest[i]),color=vessID)) +
+    geom_point(size=1) +
+    ggtitle('Correlating locomotion with haem responses') +
+    geom_smooth(method=lm, se=FALSE, fullrange=FALSE)+ 
+    facet_wrap(~ vessID)+
+    ylab(variablesofinterest[i])+
+    theme_classic(base_size = 14)+
+    theme(legend.position = "none")
+  print(p2)
+  
+  #STATS: CORR
+  print(variablesofinterest[i])
+  
+  #t <- data_table %>% filter(vessID=="dv")
+  ##clipr::write_clip(t$loco_auc)
+  #clipr::write_clip(t$minpk)
+  
+  print("Artery: ")
+  t <- data_table %>% filter(vessID=="art")
+  print(cor.test(formula = ~loco_auc+get(variablesofinterest[i]), data=t))
+  rm(t)
+  print("Draining vein: ")
+  t <- data_table %>% filter(vessID=="dv")
+  print(cor.test(formula = ~loco_auc+get(variablesofinterest[i]), data=t))
+  rm(t)
+  print("Whisker vein: ")
+  t <- data_table %>% filter(vessID=="wv")
+  print(cor.test(formula = ~loco_auc+get(variablesofinterest[i]), data=t))
+  rm(t)
+  
+  
+} # end of looping ts metrics of interest
+
+## scatter plots for dv min peak and art max pk 
+# i.e. does a larger artery dilation, need a larger vein constriction?? 
+
+# reconfigure table so that artery max pk and corresponding dv min peak are aligned on same row
+t_art <- data_table %>% filter(vessID=="art")
+t_art$vessID <- NULL
+t_art$t2max <- NULL
+t_art$t2o <- NULL
+t_art$minpk <- NULL
+t_art$t2min <- NULL
+t_art$loco_auc <- NULL
+t_art$peak <- NULL
+t_art$timing <- NULL
+names(t_art)[names(t_art) == 'maxpk'] <- 'art_maxpk' 
+t_dv <- data_table %>% filter(vessID=="dv")
+t_dv$vessID <- NULL
+t_dv$t2max <- NULL
+t_dv$t2o <- NULL
+t_dv$maxpk <- NULL
+t_dv$t2min <- NULL
+t_dv$loco_auc <- NULL
+t_dv$peak <- NULL
+t_dv$timing <- NULL
+names(t_dv)[names(t_dv) == 'minpk'] <- 'dv_minpk' 
+#merge two tables into one for plots
+artmax_dvmin_tbl <- merge(t_art,t_dv)
+rm(t_art,t_dv)
+
+# plots and stats
+p2 <- ggplot(artmax_dvmin_tbl, aes(x=art_maxpk, y=dv_minpk)) +
+    geom_point(size=1) +
+    ggtitle('Correlating haem response sizes for art and dv') +
+    geom_smooth(method=lm, se=FALSE, fullrange=FALSE)+ 
+    theme_classic(base_size = 14)
+print(p2)
+#correlation stats test
+print(cor.test(formula = ~art_maxpk+dv_minpk, data=artmax_dvmin_tbl))
+
+
+  
+```
+<font size="10"> FIGURE 3F: Comparing top and bottom 10% loco trials: </font> 
+
+```{r, echo  = FALSE}
+
+# plot max (art, wv) and min (dv) peaks separated by vessel type and loco grp 
+p1 <- data_table_locoGrp %>%
+  ggplot(aes(x=locoGrp, y=peak, fill=locoGrp)) +
+    geom_violin(position=position_dodge(1)) +
+  ylab('Peak (%)') +
+  xlab('Locomotion Group')+
+  theme_classic(base_size = 14)+
+  theme(legend.position = "none")+ #"right"
+  facet_wrap(~vessID)
+  print(p1)
+  
+#LMM with loco and vess inputted
+model <- lmer(peak~vessID*locoGrp + (1|animalID), data = data_table_locoGrp) 
+  print(anova(model))
+  em_res = emmeans(model, ~ locoGrp*vessID)
+  print(pairs(em_res))
+  
+  #t <- data_table_locoGrp %>% filter(vessID=="dv" & locoGrp=="top")
+  #clipr::write_clip(t$peak)
+  
+  #DESCRIPTIVES
+  t <- aggregate(peak ~ vessID*locoGrp, data_table_locoGrp, mean)
+  t <- t[, !duplicated(colnames(t))]
+  names(t)[names(t) == 'peak'] <- 'peak_m' 
+  t1 <- aggregate(peak ~ vessID*locoGrp, data_table_locoGrp, sd)
+  t1 <- t1[, !duplicated(colnames(t1))]
+  names(t1)[names(t1) == 'peak'] <- 'peak_sd' 
+  loco_desc_print <- cbind(t,t1)
+  print(loco_desc_print)
+             
+#### also try stats with two group comparisons within each group:
+  
+ # average across sessions
+ #create a table with each session having an average (rather than having a datapt per loco event)
+data_locoGrp_meanpersess <- aggregate(peak ~ sessID*vessID*locoGrp, data_table_locoGrp, mean)
+
+#stats: two-grp comparisons on data averaged per session
+#conducted paired sample two group comparison on bottom to top loco grps per each vessel type
+print("CHECK NORMAL DISTRIBUTION")
+# check normality for ALL data and for data which is averaged across loco events (per sess)
+print("art")
+t <-  data_locoGrp_meanpersess %>% filter(vessID=="art")
+shapiro.test(t$peak) #data is not normally distributed
+print("wv")
+t <-  data_locoGrp_meanpersess %>% filter(vessID=="wv")
+shapiro.test(t$peak) #data is not normally distributed
+print("dv")
+t <-  data_locoGrp_meanpersess %>% filter(vessID=="dv")
+shapiro.test(t$peak) #data is not normally distributed
+#
+# # non parametric tests required
+# # ART
+# x <- data_locoGrp_meanpersess %>% filter(vessID=="art" & locoGrp=='bottom')
+# y <- data_locoGrp_meanpersess %>% filter(vessID=="art" & locoGrp=='top')
+# print("Comparing art max pk between loco groups")
+# print(wilcox.test(x$peak, y$peak, mu = 0, paired = FALSE)) #mann-whitney as diff sessions contributed so not paired
+# # WV
+# x <- data_locoGrp_meanpersess %>% filter(vessID=="wv" & locoGrp=='bottom')
+# y <- data_locoGrp_meanpersess %>% filter(vessID=="wv" & locoGrp=='top')
+# print("Comparing wv max pk between loco groups")
+# print(wilcox.test(x$peak, y$peak, mu = 0, paired = FALSE)) #mann-whitney as diff sessions contributed so not paired
+
+#nonparametric two-way ANOVA for max peak (art and wv)
+# ANOVA procedure on original data
+# https://www.cfholbert.com/blog/nonparametric_two_way_anova/
+aov.org <- aov(
+  peak ~ vessID * locoGrp, data = data_locoGrp_meanpersess %>% filter(vessID!="dv"),
+  contrasts = list(
+    vessID = 'contr.sum',
+    locoGrp = 'contr.sum'
+  )
+)
+print(anova(aov.org)) #, type = 'III'
+print(emmeans(aov.org, pairwise ~ vessID * locoGrp))
+
+
+# DV
+x <- data_locoGrp_meanpersess %>% filter(vessID=="dv" & locoGrp=='bottom')
+y <- data_locoGrp_meanpersess %>% filter(vessID=="dv" & locoGrp=='top')
+print("Comparing dv min pk between loco groups")
+print(wilcox.test(x$peak, y$peak, mu = 0, paired = FALSE)) #mann-whitney as diff sessions contributed so not paired
+
+
+
+```
+<font size="10"> FIGURE 5: Boxplots and LMM results sep by disease grp: </font> 
+
+```{r, fig.height=10, fig.width=10, echo = FALSE, message=FALSE}
+
+variablesofinterest <- c("loco_auc","maxpk","t2max","t2o","minpk","t2min")
+
+for(i in 1:length(variablesofinterest)) { #loop ts metrics of interest
+  
+  #individual datapts, colour coded by animal ID, facet wrap to visualise per grp
+  p1 <- data_table %>%
+  ggplot(aes(x=vessID, y=get(variablesofinterest[i]), fill=vessID)) +
+    geom_violin(position=position_dodge(1)) +
+  #geom_point(aes(color = animalID),size=0.5) +
+  #geom_jitter(aes(color = animalID),size=0.5) +
+ # stat_summary(aes(group=vessID), fun=mean, geom="line", color='black')+
+ # stat_summary(fun.data = "mean_sd", geom = "errorbar", color = 'black', width = 0.2, linewidth =0.5) +
+ # stat_summary(aes(group = 1), geom = "point", fun = mean, shape = 10, size = 2, colour = "black") +
+  ylab(variablesofinterest[i]) +
+  xlab('Vessel Type')+
+  theme_classic(base_size = 14)+
+  theme(legend.position = "none")+ #"right"
+  facet_wrap(~grpID)
+  print(p1)
+  
+  # stats and plots for vessel ROIs separated by experimental groups
+  model <- lmer(get(variablesofinterest[i])~vessID*grpID + (1|animalID), data = data_table) 
+  print(anova(model))
+  em_res = emmeans(model, ~ vessID*grpID)
+  print(pairs(em_res))
+  
+} # end of looping ts metrics of interest
+
+# for copying and pasting data into graphpad or excel for plots/data sharing
+#t <- data_table %>% filter(vessID=="dv" & grpID==4)
+#clipr::write_clip(t$minpk)
+
+
+# also run stats on loco_auc between groups as need to know whether different experimental groups differences could be driven by significantly different levels of loco 
+print("Check for differences in locomotion across exp grps")
+model <- lmer(loco_auc~vessID*grpID + (1|animalID), data = data_table) 
+print(anova(model))
+# NB no sig diffs in loco_auc across grps so dnt need pairwise
+#em_res = emmeans(model, ~ vessID*grpID)
+#print(pairs(em_res))
+
+rm(em_res,model,p,p1,i) #remove unused variables to tidy work space
+
+  
+```
+
+<font size="10"> SUPP FIG: Scatterplots sep by disease grp: </font> 
+
+```{r, fig.height=10, fig.width=10, echo = FALSE, message=FALSE}
+
+variablesofinterest <- c("maxpk","minpk")
+
+for(i in 1:length(variablesofinterest)) { #loop ts metrics of interest
+  
+# Scatter plots and correlation analysis
+
+p3 <- ggplot(artmax_dvmin_tbl, aes(x=art_maxpk, y=dv_minpk,shape=grpID, color=grpID)) +
+    geom_point(size=1) +
+    ggtitle('Correlating haem response sizes for art and dv') +
+    geom_smooth(method=lm, se=FALSE, fullrange=FALSE)+ 
+    facet_wrap(~ grpID)+
+    theme_classic(base_size = 14)+
+    theme(legend.position = "right")
+  print(p3)
+  
+#correlation stats test per group
+print("Group 1:")  
+print(cor.test(formula = ~art_maxpk+dv_minpk, data=artmax_dvmin_tbl%>% filter(grpID==1)))
+print("Group 2:")  
+print(cor.test(formula = ~art_maxpk+dv_minpk, data=artmax_dvmin_tbl%>% filter(grpID==2)))
+print("Group 3:")  
+print(cor.test(formula = ~art_maxpk+dv_minpk, data=artmax_dvmin_tbl%>% filter(grpID==3)))
+print("Group 4:")  
+print(cor.test(formula = ~art_maxpk+dv_minpk, data=artmax_dvmin_tbl%>% filter(grpID==4)))
+#only group 4 show sig correlation between size of min pk for dv and size of max pk for art
+
+
+ p3 <- ggplot(data_table, aes(x=loco_auc, y=get(variablesofinterest[i]),shape=grpID,color=vessID)) +
+    geom_point(size=1) +
+    ggtitle('Correlating locomotion with haem responses') +
+    geom_smooth(method=lm, se=FALSE, fullrange=FALSE)+ 
+    facet_wrap(~ vessID*grpID)+
+    theme_classic(base_size = 14)+
+    ylab(variablesofinterest[i])+
+    theme(legend.position = "right")
+  print(p3)
+  
+
+
+}
+
+  
+```
